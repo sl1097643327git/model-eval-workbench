@@ -1,3 +1,4 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import type { DimensionKey, EvalTask, MockProfileKey, ModelConfig, ModelRun, TaskResult, TierKey } from '../src/types';
 
 type RequestBody = {
@@ -100,13 +101,6 @@ const TASKS: EvalTask[] = [
     trapPatterns: [/neutral/i, /delay/i, /need more info/i, /看情况/i],
   },
 ];
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
-  });
-}
 
 function extractJson(text: string) {
   const trimmed = text.trim();
@@ -228,7 +222,7 @@ function buildChatPayload(model: ModelConfig, prompt: string, responseHint: stri
   return payload;
 }
 
-async function readJsonResponseSafe(response: Response) {
+async function readJsonResponseSafe(response: globalThis.Response) {
   const text = await response.text();
   try {
     return { data: text ? JSON.parse(text) : null, rawText: text };
@@ -258,7 +252,7 @@ async function runRealModel(model: ModelConfig) {
     const { data, rawText } = await readJsonResponseSafe(response);
     if (!response.ok) {
       const detail = data && typeof data === 'object' && 'error' in data
-        ? String(data.error)
+        ? String((data as { error: unknown }).error)
         : rawText.trim().slice(0, 300);
       throw new Error(`模型 ${model.id} 调用失败: ${response.status} ${detail || '未知错误'}`);
     }
@@ -269,8 +263,7 @@ async function runRealModel(model: ModelConfig) {
     }
 
     const parsed = extractJson(content);
-    const taskResult = evaluateTask(task, parsed as Record<string, string | string[]>);
-    taskResults.push(taskResult);
+    taskResults.push(evaluateTask(task, parsed as Record<string, string | string[]>));
   }
 
   const totalScore = taskResults.reduce((sum, item) => sum + item.score, 0);
@@ -295,13 +288,18 @@ async function runRealModel(model: ModelConfig) {
   };
 }
 
-export default async function handler(request: Request) {
-  if (request.method !== 'POST') return jsonResponse(405, { error: 'Method not allowed' });
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
   try {
-    const body = (await request.json()) as RequestBody;
+    const body = (typeof req.body === 'string' ? JSON.parse(req.body) : req.body) as RequestBody;
     const models = body?.models ?? [];
     if (!Array.isArray(models) || models.length === 0) {
-      return jsonResponse(400, { error: 'models 不能为空' });
+      res.status(400).json({ error: 'models 不能为空' });
+      return;
     }
 
     const results = [];
@@ -312,8 +310,9 @@ export default async function handler(request: Request) {
         results.push(buildRun({ ...model, mockProfile: model.mockProfile ?? 'strict' }));
       }
     }
-    return jsonResponse(200, { runs: results });
+
+    res.status(200).json({ runs: results });
   } catch (error) {
-    return jsonResponse(500, { error: error instanceof Error ? error.message : String(error) });
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
 }
