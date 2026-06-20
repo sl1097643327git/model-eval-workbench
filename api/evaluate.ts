@@ -24,6 +24,43 @@ function extractJson(text: string) {
   }
 }
 
+function buildChatPayload(model: ModelConfig, prompt: string, responseHint: string, taskId: string, taskTitle: string) {
+  const payload: Record<string, unknown> = {
+    model: model.model,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content:
+          `题目ID: ${taskId}\n` +
+          `题目标题: ${taskTitle}\n` +
+          `题目要求: ${prompt}\n` +
+          `输出示例: ${responseHint}\n` +
+          '请只返回一个 JSON 对象。',
+      },
+    ],
+  };
+
+  if (typeof model.temperature === 'number' && Number.isFinite(model.temperature)) {
+    payload.temperature = model.temperature;
+  }
+  if (typeof model.maxTokens === 'number' && Number.isFinite(model.maxTokens) && model.maxTokens > 0) {
+    payload.max_tokens = model.maxTokens;
+  }
+
+  return payload;
+}
+
+async function readJsonResponseSafe(response: Response) {
+  const text = await response.text();
+  try {
+    return { data: text ? JSON.parse(text) : null, rawText: text };
+  } catch {
+    return { data: null, rawText: text };
+  }
+}
+
 async function runRealModel(model: ModelConfig) {
   if (!model.baseUrl || !model.apiKey) {
     throw new Error(`模型 ${model.id} 缺少 baseUrl 或 apiKey`);
@@ -31,24 +68,7 @@ async function runRealModel(model: ModelConfig) {
 
   const taskResults = [];
   for (const task of TASKS) {
-    const payload = {
-      model: model.model,
-      temperature: model.temperature,
-      max_tokens: model.maxTokens,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content:
-            `题目ID: ${task.id}\n` +
-            `题目标题: ${task.title}\n` +
-            `题目要求: ${task.prompt}\n` +
-            `输出示例: ${task.responseHint}\n` +
-            `请只返回一个 JSON 对象。`,
-        },
-      ],
-    };
+    const payload = buildChatPayload(model, task.prompt, task.responseHint, task.id, task.title);
 
     const response = await fetch(`${model.baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
@@ -59,11 +79,14 @@ async function runRealModel(model: ModelConfig) {
       body: JSON.stringify(payload),
     });
 
+    const { data, rawText } = await readJsonResponseSafe(response);
     if (!response.ok) {
-      throw new Error(`模型 ${model.id} 调用失败: ${response.status} ${await response.text()}`);
+      const detail = data && typeof data === 'object' && 'error' in data
+        ? String(data.error)
+        : rawText.trim().slice(0, 300);
+      throw new Error(`模型 ${model.id} 调用失败: ${response.status} ${detail || '未知错误'}`);
     }
 
-    const data = await response.json();
     const content = data?.choices?.[0]?.message?.content;
     if (!content || typeof content !== 'string') {
       throw new Error(`模型 ${model.id} 未返回有效内容`);

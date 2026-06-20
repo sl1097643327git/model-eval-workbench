@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
   AlertCircle,
-  Brain,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -10,35 +9,41 @@ import {
   Cpu,
   Gauge,
   KeyRound,
-  Layers3,
   LoaderCircle,
+  Plus,
   RefreshCw,
   Send,
   ShieldAlert,
   Sparkles,
+  Trash2,
   Trophy,
   XCircle,
 } from 'lucide-react';
-import { DEFAULT_MODELS, DIMENSION_META, TASKS } from './data';
+import { DEFAULT_MODELS, DIMENSION_META } from './data';
 import type { ModelConfig, ModelRun } from './types';
 
 type ConfigDraft = {
+  id: string;
   provider: string;
   model: string;
   baseUrl: string;
   apiKey: string;
-  temperature: string;
-  maxTokens: string;
 };
 
-const DEFAULT_DRAFT: ConfigDraft = {
-  provider: DEFAULT_MODELS[0]?.provider ?? 'openrouter',
-  model: DEFAULT_MODELS[0]?.model ?? '',
-  baseUrl: 'https://openrouter.ai/api/v1',
-  apiKey: '',
-  temperature: '0.2',
-  maxTokens: '1200',
-};
+const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
+const UI_VERSION = 'v2026.06.21-1';
+
+function createDraft(seed?: Partial<ConfigDraft>, index = 1): ConfigDraft {
+  return {
+    id: seed?.id ?? `model-${index}`,
+    provider: seed?.provider ?? DEFAULT_MODELS[0]?.provider ?? 'openrouter',
+    model: seed?.model ?? DEFAULT_MODELS[0]?.model ?? '',
+    baseUrl: seed?.baseUrl ?? DEFAULT_BASE_URL,
+    apiKey: seed?.apiKey ?? '',
+  };
+}
+
+const DEFAULT_DRAFTS: ConfigDraft[] = [createDraft(undefined, 1)];
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint: string }) {
   return (
@@ -50,44 +55,52 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint: 
   );
 }
 
-function StepCard({
-  index,
-  title,
-  text,
-  active,
-}: {
-  index: number;
-  title: string;
-  text: string;
-  active?: boolean;
-}) {
-  return (
-    <div className={`step-card${active ? ' active' : ''}`}>
-      <div className="step-index">{index}</div>
-      <div>
-        <div className="step-title">{title}</div>
-        <div className="muted step-text">{text}</div>
-      </div>
-    </div>
-  );
-}
-
 function buildConfigFromDraft(draft: ConfigDraft): ModelConfig {
   return {
-    id: 'primary-model',
+    id: draft.id.trim(),
     provider: draft.provider.trim(),
     model: draft.model.trim(),
-    temperature: Number(draft.temperature || '0'),
-    maxTokens: Number(draft.maxTokens || '0'),
     apiMode: 'real',
     baseUrl: draft.baseUrl.trim(),
     apiKey: draft.apiKey.trim(),
   };
 }
 
+function buildJsonFromDrafts(drafts: ConfigDraft[]) {
+  return JSON.stringify(drafts.map(buildConfigFromDraft), null, 2);
+}
+
+function normalizeConfigs(raw: unknown): ModelConfig[] {
+  if (!Array.isArray(raw)) {
+    throw new Error('配置必须是 JSON 数组');
+  }
+
+  return raw.map((item, index) => {
+    const current = typeof item === 'object' && item !== null ? (item as Partial<ModelConfig>) : {};
+    return {
+      id: current.id?.trim() || `model-${index + 1}`,
+      provider: current.provider?.trim() || '',
+      model: current.model?.trim() || '',
+      apiMode: 'real',
+      baseUrl: current.baseUrl?.trim() || '',
+      apiKey: current.apiKey?.trim() || '',
+    };
+  });
+}
+
+async function readResponseJsonSafe(response: Response) {
+  const text = await response.text();
+  try {
+    return { data: text ? JSON.parse(text) : null, rawText: text };
+  } catch {
+    const compactText = text.trim().slice(0, 220) || '空响应';
+    throw new Error(`服务端返回的不是 JSON：${compactText}`);
+  }
+}
+
 export default function App() {
-  const [draft, setDraft] = useState<ConfigDraft>(DEFAULT_DRAFT);
-  const [configText, setConfigText] = useState(JSON.stringify([buildConfigFromDraft(DEFAULT_DRAFT)], null, 2));
+  const [drafts, setDrafts] = useState<ConfigDraft[]>(DEFAULT_DRAFTS);
+  const [configText, setConfigText] = useState(buildJsonFromDrafts(DEFAULT_DRAFTS));
   const [advancedMode, setAdvancedMode] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -107,20 +120,40 @@ export default function App() {
   const failedCount = selectedRun?.taskResults.filter((item) => !item.passed).length ?? 0;
   const trapCount = selectedRun?.taskResults.filter((item) => item.triggeredTrap).length ?? 0;
 
-  function syncJsonFromDraft(nextDraft: ConfigDraft) {
-    setConfigText(JSON.stringify([buildConfigFromDraft(nextDraft)], null, 2));
+  function syncJsonFromDrafts(nextDrafts: ConfigDraft[]) {
+    setConfigText(buildJsonFromDrafts(nextDrafts));
   }
 
-  function updateDraft<K extends keyof ConfigDraft>(key: K, value: ConfigDraft[K]) {
-    setDraft((current) => {
-      const nextDraft = { ...current, [key]: value };
-      if (!advancedMode) syncJsonFromDraft(nextDraft);
-      return nextDraft;
+  function updateDraft(index: number, key: keyof ConfigDraft, value: string) {
+    setDrafts((current) => {
+      const nextDrafts = current.map((draft, currentIndex) => (
+        currentIndex === index ? { ...draft, [key]: value } : draft
+      ));
+      if (!advancedMode) syncJsonFromDrafts(nextDrafts);
+      return nextDrafts;
+    });
+  }
+
+  function addDraft() {
+    setDrafts((current) => {
+      const nextDrafts = [...current, createDraft({}, current.length + 1)];
+      if (!advancedMode) syncJsonFromDrafts(nextDrafts);
+      return nextDrafts;
+    });
+  }
+
+  function removeDraft(index: number) {
+    setDrafts((current) => {
+      if (current.length === 1) return current;
+      const nextDrafts = current.filter((_, currentIndex) => currentIndex !== index);
+      if (!advancedMode) syncJsonFromDrafts(nextDrafts);
+      return nextDrafts;
     });
   }
 
   function loadExample() {
-    setDraft(DEFAULT_DRAFT);
+    const nextDrafts = DEFAULT_DRAFTS.map((draft, index) => createDraft(draft, index + 1));
+    setDrafts(nextDrafts);
     setAdvancedMode(false);
     setParseError(null);
     setRunError(null);
@@ -128,26 +161,25 @@ export default function App() {
     setSelectedModelId('');
     setExpandedTaskIds([]);
     setShowOnlyIssues(true);
-    setConfigText(JSON.stringify([buildConfigFromDraft(DEFAULT_DRAFT)], null, 2));
+    setConfigText(buildJsonFromDrafts(nextDrafts));
   }
 
   function validateConfigs(configs: ModelConfig[]) {
     if (!configs.length) throw new Error('至少需要一个模型配置');
 
     for (const config of configs) {
-      if (!config.provider?.trim()) throw new Error('provider 不能为空');
-      if (!config.model?.trim()) throw new Error('model 不能为空');
-      if (!config.baseUrl?.trim()) throw new Error('baseUrl 不能为空');
-      if (!config.apiKey?.trim()) throw new Error('apiKey 不能为空');
-      if (!Number.isFinite(config.temperature)) throw new Error('temperature 必须是数字');
-      if (!Number.isFinite(config.maxTokens) || config.maxTokens <= 0) throw new Error('maxTokens 必须大于 0');
+      if (!config.id?.trim()) throw new Error('每个模型都需要 id');
+      if (!config.provider?.trim()) throw new Error(`模型 ${config.id} 的 provider 不能为空`);
+      if (!config.model?.trim()) throw new Error(`模型 ${config.id} 的 model 不能为空`);
+      if (!config.baseUrl?.trim()) throw new Error(`模型 ${config.id} 的 baseUrl 不能为空`);
+      if (!config.apiKey?.trim()) throw new Error(`模型 ${config.id} 的 apiKey 不能为空`);
     }
   }
 
   async function handleRun() {
     try {
-      const rawText = advancedMode ? configText : JSON.stringify([buildConfigFromDraft(draft)]);
-      const parsed = JSON.parse(rawText) as ModelConfig[];
+      const requestConfigText = advancedMode ? configText : buildJsonFromDrafts(drafts);
+      const parsed = normalizeConfigs(JSON.parse(requestConfigText));
       validateConfigs(parsed);
 
       setParseError(null);
@@ -157,27 +189,22 @@ export default function App() {
       const response = await fetch('/api/evaluate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          models: parsed.map((model, index) => ({
-            ...model,
-            id: model.id?.trim() || `model-${index + 1}`,
-            apiMode: 'real',
-          })),
-        }),
+        body: JSON.stringify({ models: parsed }),
       });
 
-      const data = await response.json();
+      const { data, rawText: responseText } = await readResponseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(data?.error ?? '真实评测调用失败');
+        const detail = data && typeof data === 'object' && 'error' in data ? String(data.error) : responseText.trim();
+        throw new Error(detail || '真实评测调用失败');
       }
 
-      const nextRuns = data.runs ?? [];
+      const nextRuns = Array.isArray(data?.runs) ? data.runs : [];
       setRuns(nextRuns);
       setSelectedModelId(nextRuns[0]?.modelId ?? '');
       setExpandedTaskIds(nextRuns[0]?.taskResults.filter((item: { passed: boolean; triggeredTrap: boolean }) => !item.passed || item.triggeredTrap).map((item: { taskId: string }) => item.taskId) ?? []);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes('JSON')) {
+      if (message.includes('JSON') || message.includes('配置必须是 JSON 数组')) {
         setParseError(message);
       } else {
         setRunError(message);
@@ -188,7 +215,7 @@ export default function App() {
   }
 
   async function copyConfig() {
-    const text = advancedMode ? configText : JSON.stringify([buildConfigFromDraft(draft)], null, 2);
+    const text = advancedMode ? configText : buildJsonFromDrafts(drafts);
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -204,64 +231,72 @@ export default function App() {
     <div className="app-shell">
       <div className="hero compact-hero">
         <div>
-          <div className="eyebrow">真实模型评测工作台</div>
-          <h1>直接接 API，快速跑出清晰结果</h1>
-          <p>
-            不再区分 mock。你只需要填模型接口信息，点一次运行，就能看到总分、通过率、错题位置和每题失分原因。
-          </p>
+          <div className="hero-topline">
+            <div className="eyebrow">真实模型评测工作台</div>
+            <div className="version-chip">{UI_VERSION}</div>
+          </div>
+          <h1>模型评测</h1>
         </div>
         <div className="hero-actions">
           <button className="button" onClick={handleRun} disabled={isRunning}>
-            {isRunning ? <><LoaderCircle size={16} className="spin" /> 正在评测</> : <><Send size={16} /> 开始评测</>}
+            {isRunning ? <><LoaderCircle size={16} className="spin" /> 评测中</> : <><Send size={16} /> 开始评测</>}
           </button>
-          <button className="button secondary" onClick={loadExample}><RefreshCw size={16} /> 恢复示例</button>
+          <button className="button secondary" onClick={loadExample}><RefreshCw size={16} /> 重置</button>
         </div>
       </div>
 
-      <div className="steps-grid">
-        <StepCard index={1} title="填接口信息" text="先填 provider、model、baseUrl、apiKey。" active />
-        <StepCard index={2} title="发起真实评测" text="点击开始评测，系统会调用真实模型接口。" active={isRunning} />
-        <StepCard index={3} title="看清结果" text="先看总分与错题，再展开看每题原因。" active={hasResults} />
-      </div>
-
-      <div className="panel-grid single-focus">
+      <div className="panel-grid single-focus compact-panel-grid">
         <div className="card">
           <div className="card-header">
-            <h2><KeyRound size={18} style={{ marginRight: 8, verticalAlign: 'text-bottom' }} />模型接入信息</h2>
-            <div className="toolbar-inline">
+            <h2><KeyRound size={18} style={{ marginRight: 8, verticalAlign: 'text-bottom' }} />模型配置</h2>
+            <div className="toolbar-inline wrap-mobile">
               <button className={`button secondary small${advancedMode ? ' active-mode' : ''}`} onClick={() => setAdvancedMode((value) => !value)}>
-                <Sparkles size={14} /> {advancedMode ? '切回简洁模式' : '高级 JSON'}
+                <Sparkles size={14} /> {advancedMode ? '表单模式' : 'JSON 模式'}
               </button>
-              <button className="button secondary small" onClick={copyConfig}><Copy size={14} /> 复制配置</button>
+              {!advancedMode ? (
+                <button className="button secondary small" onClick={addDraft}><Plus size={14} /> 添加模型</button>
+              ) : null}
+              <button className="button secondary small" onClick={copyConfig}><Copy size={14} /> 复制</button>
             </div>
           </div>
 
           {!advancedMode ? (
-            <div className="form-grid">
-              <label className="field">
-                <span>Provider</span>
-                <input value={draft.provider} onChange={(e) => updateDraft('provider', e.target.value)} placeholder="如 openrouter / openai / anthropic" />
-              </label>
-              <label className="field">
-                <span>Model</span>
-                <input value={draft.model} onChange={(e) => updateDraft('model', e.target.value)} placeholder="如 openai/gpt-4.1-mini" />
-              </label>
-              <label className="field field-full">
-                <span>Base URL</span>
-                <input value={draft.baseUrl} onChange={(e) => updateDraft('baseUrl', e.target.value)} placeholder="如 https://openrouter.ai/api/v1" />
-              </label>
-              <label className="field field-full">
-                <span>API Key</span>
-                <input type="password" value={draft.apiKey} onChange={(e) => updateDraft('apiKey', e.target.value)} placeholder="输入真实 API Key" />
-              </label>
-              <label className="field">
-                <span>Temperature</span>
-                <input value={draft.temperature} onChange={(e) => updateDraft('temperature', e.target.value)} placeholder="0.2" />
-              </label>
-              <label className="field">
-                <span>Max Tokens</span>
-                <input value={draft.maxTokens} onChange={(e) => updateDraft('maxTokens', e.target.value)} placeholder="1200" />
-              </label>
+            <div className="model-form-list">
+              {drafts.map((draft, index) => (
+                <div className="model-form-card" key={`${draft.id}-${index}`}>
+                  <div className="model-form-head">
+                    <div>
+                      <strong>模型 {index + 1}</strong>
+                    </div>
+                    <button className="button secondary small" onClick={() => removeDraft(index)} disabled={drafts.length === 1}>
+                      <Trash2 size={14} /> 删除
+                    </button>
+                  </div>
+
+                  <div className="form-grid">
+                    <label className="field">
+                      <span>ID</span>
+                      <input value={draft.id} onChange={(e) => updateDraft(index, 'id', e.target.value)} placeholder="gpt-4o-mini" />
+                    </label>
+                    <label className="field">
+                      <span>Provider</span>
+                      <input value={draft.provider} onChange={(e) => updateDraft(index, 'provider', e.target.value)} placeholder="openrouter / openai / anthropic" />
+                    </label>
+                    <label className="field field-full">
+                      <span>Model</span>
+                      <input value={draft.model} onChange={(e) => updateDraft(index, 'model', e.target.value)} placeholder="openai/gpt-4.1-mini" />
+                    </label>
+                    <label className="field field-full">
+                      <span>Base URL</span>
+                      <input value={draft.baseUrl} onChange={(e) => updateDraft(index, 'baseUrl', e.target.value)} placeholder="https://openrouter.ai/api/v1" />
+                    </label>
+                    <label className="field field-full">
+                      <span>API Key</span>
+                      <input type="password" value={draft.apiKey} onChange={(e) => updateDraft(index, 'apiKey', e.target.value)} placeholder="API Key" />
+                    </label>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             <textarea className="textarea mono compact-textarea" value={configText} onChange={(e) => setConfigText(e.target.value)} spellCheck={false} />
@@ -271,53 +306,25 @@ export default function App() {
             <div className="badge warn block-badge"><ShieldAlert size={14} /> JSON 解析失败：{parseError}</div>
           ) : runError ? (
             <div className="badge warn block-badge"><AlertCircle size={14} /> 运行失败：{runError}</div>
-          ) : (
-            <div className="footer-note">
-              建议先接入一个模型跑通，再扩展成多个模型。手机上默认使用简洁表单，只有需要批量配置时再切到高级 JSON。
-            </div>
-          )}
-        </div>
-
-        <div className="card quick-guide-card">
-          <div className="card-header">
-            <h2><Brain size={18} style={{ marginRight: 8, verticalAlign: 'text-bottom' }} />使用说明</h2>
-          </div>
-          <div className="tip-list compact-list">
-            <div className="tip">
-              <strong>适合谁</strong>
-              <div className="muted">想直接比较一个或多个真实模型表现，而不是看演示数据的人。</div>
-            </div>
-            <div className="tip">
-              <strong>最短路径</strong>
-              <div className="muted">填 6 个字段 → 点击开始评测 → 看总分、错题数、陷阱触发。</div>
-            </div>
-            <div className="tip">
-              <strong>结果怎么看</strong>
-              <div className="muted">先看冠军和通过率，再看失败题；只有错题才值得展开读细节。</div>
-            </div>
-            <div className="tip">
-              <strong>当前题量</strong>
-              <div className="muted">共 {TASKS.length} 题，覆盖 {Object.keys(DIMENSION_META).length} 个维度，强调结构化输出和可判定结果。</div>
-            </div>
-          </div>
+          ) : null}
         </div>
       </div>
 
       <div className="stat-grid compact-stats">
-        <StatCard label="当前冠军" value={bestRun ? bestRun.label : '尚未评测'} hint={bestRun ? `${bestRun.totalScore}/${bestRun.maxScore} · ${bestRun.tier}` : '先运行一次才会出现'} />
-        <StatCard label="通过率" value={selectedRun ? `${selectedRun.accuracy}%` : '-'} hint={selectedRun ? `${selectedRun.taskResults.filter((item) => item.passed).length}/${selectedRun.taskResults.length} 题满分` : '暂无结果'} />
-        <StatCard label="失败题数" value={selectedRun ? String(failedCount) : '-'} hint="优先看这些题的扣分原因" />
-        <StatCard label="陷阱触发" value={selectedRun ? String(trapCount) : '-'} hint="触发后会有额外扣分" />
+        <StatCard label="当前冠军" value={bestRun ? bestRun.label : '-'} hint={bestRun ? `${bestRun.totalScore}/${bestRun.maxScore} · ${bestRun.tier}` : ''} />
+        <StatCard label="通过率" value={selectedRun ? `${selectedRun.accuracy}%` : '-'} hint={selectedRun ? `${selectedRun.taskResults.filter((item) => item.passed).length}/${selectedRun.taskResults.length}` : ''} />
+        <StatCard label="失败题数" value={selectedRun ? String(failedCount) : '-'} hint="" />
+        <StatCard label="陷阱触发" value={selectedRun ? String(trapCount) : '-'} hint="" />
       </div>
 
       {hasResults ? (
         <>
           <div className="card" style={{ marginBottom: 16 }}>
             <div className="card-header stack-mobile">
-              <h2><Trophy size={18} style={{ marginRight: 8, verticalAlign: 'text-bottom' }} />模型结果总览</h2>
+              <h2><Trophy size={18} style={{ marginRight: 8, verticalAlign: 'text-bottom' }} />结果</h2>
               <div className="toolbar-inline wrap-mobile">
                 <button className={`button secondary small${showOnlyIssues ? ' active-mode' : ''}`} onClick={() => setShowOnlyIssues((value) => !value)}>
-                  <ShieldAlert size={14} /> {showOnlyIssues ? '当前仅看问题题目' : '显示全部题目'}
+                  <ShieldAlert size={14} /> {showOnlyIssues ? '仅问题题' : '全部题目'}
                 </button>
               </div>
             </div>
@@ -346,7 +353,7 @@ export default function App() {
                         <td>{run.accuracy}%</td>
                         <td><span className="badge">{run.tier}</span></td>
                         <td>{issueCount}</td>
-                        <td><button className="button secondary small" onClick={() => setSelectedModelId(run.modelId)}>查看详情</button></td>
+                        <td><button className="button secondary small" onClick={() => setSelectedModelId(run.modelId)}>查看</button></td>
                       </tr>
                     );
                   })}
@@ -374,18 +381,17 @@ export default function App() {
                     </div>
                   );
                 })}
-                <div className="footer-note">这部分适合看模型强弱结构；真正排查问题时，优先看右侧的问题题目。</div>
               </div>
 
               <div className="card">
                 <div className="card-header stack-mobile">
-                  <h2><ClipboardList size={18} style={{ marginRight: 8, verticalAlign: 'text-bottom' }} />题目结果明细</h2>
-                  <div className="muted">{showOnlyIssues ? `当前显示 ${visibleTasks.length} 道问题题` : `当前显示全部 ${visibleTasks.length} 道题`}</div>
+                  <h2><ClipboardList size={18} style={{ marginRight: 8, verticalAlign: 'text-bottom' }} />题目明细</h2>
+                  <div className="muted">{showOnlyIssues ? `${visibleTasks.length} 道问题题` : `${visibleTasks.length} 道题`}</div>
                 </div>
 
                 {visibleTasks.length === 0 ? (
                   <div className="empty-state">
-                    <CheckCircle2 size={18} /> 当前没有问题题，说明这个模型在这套题上表现完整通过。
+                    <CheckCircle2 size={18} /> 无问题题
                   </div>
                 ) : visibleTasks.map((result) => {
                   const expanded = expandedTaskIds.includes(result.taskId);
@@ -398,7 +404,7 @@ export default function App() {
                         </div>
                         <div className="task-toggle-right">
                           {result.passed ? <span className="badge ok"><CheckCircle2 size={14} />满分</span> : <span className="badge fail"><XCircle size={14} />未满分</span>}
-                          {result.triggeredTrap ? <span className="badge warn">触发陷阱</span> : null}
+                          {result.triggeredTrap ? <span className="badge warn">陷阱</span> : null}
                           <span className="score-chip">{result.score}/{result.maxScore}</span>
                           {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
                         </div>
@@ -427,7 +433,7 @@ export default function App() {
       ) : (
         <div className="card empty-results-card">
           <div className="empty-state large">
-            <Cpu size={20} /> 还没有评测结果。先填好真实模型配置，再点击“开始评测”。
+            <Cpu size={20} /> 暂无结果
           </div>
         </div>
       )}

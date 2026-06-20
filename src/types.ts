@@ -6,8 +6,8 @@ export type ModelConfig = {
   id: string;
   provider: string;
   model: string;
-  temperature: number;
-  maxTokens: number;
+  temperature?: number;
+  maxTokens?: number;
   mockProfile?: MockProfileKey;
   apiMode?: 'mock' | 'real';
   baseUrl?: string;
