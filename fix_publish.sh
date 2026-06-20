@@ -5,7 +5,9 @@ export HTTPS_PROXY='http://127.0.0.1:7897'
 export ALL_PROXY='socks5://127.0.0.1:7897'
 cd /d/projects/model-eval-workbench
 printf 'before node_modules=%s dist=%s\n' "$(git ls-files node_modules | wc -l)" "$(git ls-files dist | wc -l)"
-git rm -r --cached node_modules dist
+if git ls-files --error-unmatch node_modules >/dev/null 2>&1 || git ls-files --error-unmatch dist >/dev/null 2>&1; then
+  git rm -r --cached --ignore-unmatch node_modules dist
+fi
 git add .gitignore .
 git commit -m 'chore: remove tracked dependencies and build output' || true
 printf 'after node_modules=%s dist=%s\n' "$(git ls-files node_modules | wc -l)" "$(git ls-files dist | wc -l)"
