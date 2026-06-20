@@ -12,11 +12,13 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
+  Save,
   Send,
   ShieldAlert,
   Sparkles,
   Trash2,
   Trophy,
+  Wifi,
   XCircle,
 } from 'lucide-react';
 import { DEFAULT_MODELS, DIMENSION_META } from './data';
@@ -30,8 +32,14 @@ type ConfigDraft = {
   apiKey: string;
 };
 
+type ConnectionStatus = {
+  ok: boolean;
+  modelId: string;
+  detail: string;
+};
+
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
-const UI_VERSION = 'v2026.06.21-1';
+const UI_VERSION = 'v2026.06.21-2';
 
 function createDraft(seed?: Partial<ConfigDraft>, index = 1): ConfigDraft {
   return {
@@ -106,6 +114,10 @@ export default function App() {
   const [runError, setRunError] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelId] = useState('');
   const [isRunning, setIsRunning] = useState(false);
+  const [isSavingJson, setIsSavingJson] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [jsonDirty, setJsonDirty] = useState(false);
+  const [connectionResults, setConnectionResults] = useState<ConnectionStatus[]>([]);
   const [runs, setRuns] = useState<ModelRun[]>([]);
   const [showOnlyIssues, setShowOnlyIssues] = useState(true);
   const [expandedTaskIds, setExpandedTaskIds] = useState<string[]>([]);
@@ -122,6 +134,12 @@ export default function App() {
 
   function syncJsonFromDrafts(nextDrafts: ConfigDraft[]) {
     setConfigText(buildJsonFromDrafts(nextDrafts));
+    setJsonDirty(false);
+  }
+
+  function clearMessages() {
+    setParseError(null);
+    setRunError(null);
   }
 
   function updateDraft(index: number, key: keyof ConfigDraft, value: string) {
@@ -155,13 +173,14 @@ export default function App() {
     const nextDrafts = DEFAULT_DRAFTS.map((draft, index) => createDraft(draft, index + 1));
     setDrafts(nextDrafts);
     setAdvancedMode(false);
-    setParseError(null);
-    setRunError(null);
+    clearMessages();
+    setConnectionResults([]);
     setRuns([]);
     setSelectedModelId('');
     setExpandedTaskIds([]);
     setShowOnlyIssues(true);
     setConfigText(buildJsonFromDrafts(nextDrafts));
+    setJsonDirty(false);
   }
 
   function validateConfigs(configs: ModelConfig[]) {
@@ -176,14 +195,35 @@ export default function App() {
     }
   }
 
+  function getConfigsForSubmit() {
+    const requestConfigText = advancedMode ? configText : buildJsonFromDrafts(drafts);
+    const parsed = normalizeConfigs(JSON.parse(requestConfigText));
+    validateConfigs(parsed);
+    return parsed;
+  }
+
+  async function handleSaveJson() {
+    try {
+      setIsSavingJson(true);
+      clearMessages();
+      const parsed = getConfigsForSubmit();
+      const nextDrafts = parsed.map((config, index) => createDraft(config, index + 1));
+      setDrafts(nextDrafts);
+      setConfigText(buildJsonFromDrafts(nextDrafts));
+      setJsonDirty(false);
+      setAdvancedMode(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setParseError(message);
+    } finally {
+      setIsSavingJson(false);
+    }
+  }
+
   async function handleRun() {
     try {
-      const requestConfigText = advancedMode ? configText : buildJsonFromDrafts(drafts);
-      const parsed = normalizeConfigs(JSON.parse(requestConfigText));
-      validateConfigs(parsed);
-
-      setParseError(null);
-      setRunError(null);
+      const parsed = getConfigsForSubmit();
+      clearMessages();
       setIsRunning(true);
 
       const response = await fetch('/api/evaluate', {
@@ -194,7 +234,7 @@ export default function App() {
 
       const { data, rawText: responseText } = await readResponseJsonSafe(response);
       if (!response.ok) {
-        const detail = data && typeof data === 'object' && 'error' in data ? String(data.error) : responseText.trim();
+        const detail = data && typeof data === 'object' && 'error' in data ? String((data as { error: unknown }).error) : responseText.trim();
         throw new Error(detail || '真实评测调用失败');
       }
 
@@ -211,6 +251,39 @@ export default function App() {
       }
     } finally {
       setIsRunning(false);
+    }
+  }
+
+  async function handleTestConnection() {
+    try {
+      const parsed = getConfigsForSubmit();
+      clearMessages();
+      setIsTestingConnection(true);
+      setConnectionResults([]);
+
+      const response = await fetch('/api/test-connection', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ models: parsed }),
+      });
+
+      const { data, rawText: responseText } = await readResponseJsonSafe(response);
+      if (!response.ok) {
+        const detail = data && typeof data === 'object' && 'error' in data ? String((data as { error: unknown }).error) : responseText.trim();
+        throw new Error(detail || '测试连通失败');
+      }
+
+      const nextResults = Array.isArray(data?.results) ? data.results as ConnectionStatus[] : [];
+      setConnectionResults(nextResults);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('JSON') || message.includes('配置必须是 JSON 数组')) {
+        setParseError(message);
+      } else {
+        setRunError(message);
+      }
+    } finally {
+      setIsTestingConnection(false);
     }
   }
 
@@ -238,10 +311,10 @@ export default function App() {
           <h1>模型评测</h1>
         </div>
         <div className="hero-actions">
-          <button className="button" onClick={handleRun} disabled={isRunning}>
+          <button className="button" onClick={handleRun} disabled={isRunning || isTestingConnection || isSavingJson}>
             {isRunning ? <><LoaderCircle size={16} className="spin" /> 评测中</> : <><Send size={16} /> 开始评测</>}
           </button>
-          <button className="button secondary" onClick={loadExample}><RefreshCw size={16} /> 重置</button>
+          <button className="button secondary" onClick={loadExample} disabled={isRunning || isTestingConnection || isSavingJson}><RefreshCw size={16} /> 重置</button>
         </div>
       </div>
 
@@ -250,13 +323,20 @@ export default function App() {
           <div className="card-header">
             <h2><KeyRound size={18} style={{ marginRight: 8, verticalAlign: 'text-bottom' }} />模型配置</h2>
             <div className="toolbar-inline wrap-mobile">
-              <button className={`button secondary small${advancedMode ? ' active-mode' : ''}`} onClick={() => setAdvancedMode((value) => !value)}>
+              <button className={`button secondary small${advancedMode ? ' active-mode' : ''}`} onClick={() => setAdvancedMode((value) => !value)} disabled={isRunning || isTestingConnection || isSavingJson}>
                 <Sparkles size={14} /> {advancedMode ? '表单模式' : 'JSON 模式'}
               </button>
               {!advancedMode ? (
-                <button className="button secondary small" onClick={addDraft}><Plus size={14} /> 添加模型</button>
-              ) : null}
-              <button className="button secondary small" onClick={copyConfig}><Copy size={14} /> 复制</button>
+                <button className="button secondary small" onClick={addDraft} disabled={isRunning || isTestingConnection || isSavingJson}><Plus size={14} /> 添加模型</button>
+              ) : (
+                <button className="button secondary small" onClick={handleSaveJson} disabled={isRunning || isTestingConnection || isSavingJson}>
+                  {isSavingJson ? <><LoaderCircle size={14} className="spin" /> 保存中</> : <><Save size={14} /> 保存到表单</>}
+                </button>
+              )}
+              <button className="button secondary small" onClick={handleTestConnection} disabled={isRunning || isTestingConnection || isSavingJson}>
+                {isTestingConnection ? <><LoaderCircle size={14} className="spin" /> 测试中</> : <><Wifi size={14} /> 测试连通</>}
+              </button>
+              <button className="button secondary small" onClick={copyConfig} disabled={isRunning || isTestingConnection || isSavingJson}><Copy size={14} /> 复制</button>
             </div>
           </div>
 
@@ -268,7 +348,7 @@ export default function App() {
                     <div>
                       <strong>模型 {index + 1}</strong>
                     </div>
-                    <button className="button secondary small" onClick={() => removeDraft(index)} disabled={drafts.length === 1}>
+                    <button className="button secondary small" onClick={() => removeDraft(index)} disabled={drafts.length === 1 || isRunning || isTestingConnection || isSavingJson}>
                       <Trash2 size={14} /> 删除
                     </button>
                   </div>
@@ -299,13 +379,46 @@ export default function App() {
               ))}
             </div>
           ) : (
-            <textarea className="textarea mono compact-textarea" value={configText} onChange={(e) => setConfigText(e.target.value)} spellCheck={false} />
+            <>
+              <textarea
+                className="textarea mono compact-textarea"
+                value={configText}
+                onChange={(e) => {
+                  setConfigText(e.target.value);
+                  setJsonDirty(true);
+                }}
+                spellCheck={false}
+              />
+              <div className="editor-hint muted">{jsonDirty ? 'JSON 已修改，点击“保存到表单”后会同步回表单模式。' : 'JSON 与表单已同步。'}</div>
+            </>
           )}
 
           {parseError ? (
             <div className="badge warn block-badge"><ShieldAlert size={14} /> JSON 解析失败：{parseError}</div>
           ) : runError ? (
             <div className="badge warn block-badge"><AlertCircle size={14} /> 运行失败：{runError}</div>
+          ) : null}
+
+          {!advancedMode && (parseError || runError) ? (
+            <div className="inline-error-actions">
+              <button className="button secondary small" onClick={() => setAdvancedMode(true)}>
+                <AlertCircle size={14} /> 去 JSON 模式排查
+              </button>
+            </div>
+          ) : null}
+
+          {connectionResults.length > 0 ? (
+            <div className="connection-results">
+              {connectionResults.map((result) => (
+                <div className={`connection-item ${result.ok ? 'ok' : 'fail'}`} key={result.modelId}>
+                  <div className="connection-title">
+                    {result.ok ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+                    <strong>{result.modelId}</strong>
+                  </div>
+                  <div className="muted">{result.detail}</div>
+                </div>
+              ))}
+            </div>
           ) : null}
         </div>
       </div>

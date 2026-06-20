@@ -140,6 +140,10 @@ input::placeholder, textarea::placeholder { color: #64748b; }
   resize: vertical;
 }
 .compact-textarea { min-height: 240px; }
+.editor-hint {
+  margin-top: 10px;
+  font-size: 13px;
+}
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -204,6 +208,34 @@ input::placeholder, textarea::placeholder { color: #64748b; }
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.inline-error-actions {
+  margin-top: 10px;
+}
+.connection-results {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+.connection-item {
+  border-radius: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(2, 6, 23, 0.32);
+}
+.connection-item.ok {
+  border-color: rgba(16, 185, 129, 0.28);
+  background: rgba(16, 185, 129, 0.08);
+}
+.connection-item.fail {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.08);
+}
+.connection-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 .stat-grid {
   display: grid;
