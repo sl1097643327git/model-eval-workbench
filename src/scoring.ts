@@ -1,4 +1,4 @@
-import { DEFAULT_MODELS, PROFILE_OVERRIDES, TASKS, TIER_RULES } from './data';
+import { DEFAULT_MODELS, PROFILE_OVERRIDES, TASKS, TIER_RULES } from '../lib/eval-data';
 import type { EvalTask, MockProfileKey, ModelConfig, ModelRun, TaskResult } from './types';
 
 function scoreToTier(score: number) {

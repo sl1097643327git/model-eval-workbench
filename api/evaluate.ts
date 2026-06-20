@@ -1,4 +1,4 @@
-import { SYSTEM_PROMPT, TASKS } from '../src/data';
+import { SYSTEM_PROMPT, TASKS } from '../lib/eval-data';
 import { buildRun } from '../src/scoring';
 import type { ModelConfig } from '../src/types';
 
