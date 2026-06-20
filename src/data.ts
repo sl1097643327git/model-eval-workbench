@@ -1,5 +1,7 @@
 import type { DimensionKey, EvalTask, MockProfileKey, ModelConfig, TierKey } from './types';
 
+export const SYSTEM_PROMPT = `你是结构化答题模型。你必须严格输出 JSON，不允许输出 markdown，不允许解释，不允许多余前后缀。所有字段必须存在，字段名必须与题目要求完全一致。`;
+
 export const DIMENSION_META: Record<DimensionKey, { label: string; short: string }> = {
   logic: { label: '形式逻辑', short: 'D1' },
   math: { label: '数学严谨', short: 'D2' },

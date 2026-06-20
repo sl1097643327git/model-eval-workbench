@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/evaluate.ts": {
+      "maxDuration": 60
+    }
+  }
+}

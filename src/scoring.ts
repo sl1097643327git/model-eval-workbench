@@ -67,7 +67,7 @@ function evaluateTask(task: EvalTask, answer: Record<string, string | string[]>)
 }
 
 export function buildRun(model: ModelConfig): ModelRun {
-  const taskResults = TASKS.map((task) => evaluateTask(task, applyProfile(task, model.mockProfile)));
+  const taskResults = TASKS.map((task) => evaluateTask(task, applyProfile(task, model.mockProfile ?? 'strict')));
   const totalScore = taskResults.reduce((sum, item) => sum + item.score, 0);
   const maxScore = taskResults.reduce((sum, item) => sum + item.maxScore, 0);
   const passedCount = taskResults.filter((item) => item.passed).length;

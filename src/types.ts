@@ -8,7 +8,10 @@ export type ModelConfig = {
   model: string;
   temperature: number;
   maxTokens: number;
-  mockProfile: MockProfileKey;
+  mockProfile?: MockProfileKey;
+  apiMode?: 'mock' | 'real';
+  baseUrl?: string;
+  apiKey?: string;
 };
 
 export type TaskCheck = {
