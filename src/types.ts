@@ -6,6 +6,7 @@ export type ModelConfig = {
   id: string;
   provider: string;
   model: string;
+  models?: string[];
   temperature?: number;
   maxTokens?: number;
   mockProfile?: MockProfileKey;

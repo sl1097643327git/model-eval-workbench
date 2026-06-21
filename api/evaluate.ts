@@ -102,6 +102,60 @@ const TASKS: EvalTask[] = [
   },
 ];
 
+function normalizeConfigs(raw: unknown): ModelConfig[] {
+  if (!Array.isArray(raw)) {
+    throw new Error('配置必须是 JSON 数组');
+  }
+
+  return raw.map((item) => {
+    const current = typeof item === 'object' && item !== null ? (item as Partial<ModelConfig>) : {};
+    const models = Array.isArray(current.models)
+      ? current.models.map((model) => String(model).trim()).filter(Boolean)
+      : (current.model ? [current.model.trim()] : []);
+
+    return {
+      id: current.id?.trim() || '',
+      provider: current.provider?.trim() || '',
+      model: models[0] || '',
+      models,
+      apiMode: current.apiMode ?? 'real',
+      baseUrl: current.baseUrl?.trim() || '',
+      apiKey: current.apiKey?.trim() || '',
+      mockProfile: current.mockProfile,
+      temperature: current.temperature,
+      maxTokens: current.maxTokens,
+    };
+  });
+}
+
+function expandConfigs(configs: ModelConfig[]) {
+  return configs.flatMap((config, configIndex) => {
+    const models = Array.isArray(config.models) && config.models.length > 0
+      ? config.models
+      : (config.model ? [config.model] : []);
+
+    return models.map((modelName, modelIndex) => ({
+      ...config,
+      id: config.id?.trim() || `${config.provider || 'provider'}-${configIndex + 1}-${modelIndex + 1}`,
+      model: modelName,
+      models,
+    }));
+  });
+}
+
+function validateConfigs(configs: ModelConfig[]) {
+  if (!configs.length) throw new Error('至少需要一个模型配置');
+
+  for (const config of configs) {
+    if (!config.provider?.trim()) throw new Error('provider 不能为空');
+    if (!config.model?.trim()) throw new Error(`供应商 ${config.provider || '-'} 的模型名不能为空`);
+    if ((config.apiMode ?? 'real') === 'real') {
+      if (!config.baseUrl?.trim()) throw new Error(`供应商 ${config.provider} 的 baseUrl 不能为空`);
+      if (!config.apiKey?.trim()) throw new Error(`供应商 ${config.provider} 的 apiKey 不能为空`);
+    }
+  }
+}
+
 function extractJson(text: string) {
   const trimmed = text.trim();
   try {
@@ -183,7 +237,7 @@ function buildRun(model: ModelConfig): ModelRun {
   }
 
   return {
-    modelId: model.id,
+    modelId: model.id || model.model,
     label: `${model.provider}/${model.model}`,
     totalScore,
     maxScore,
@@ -233,7 +287,7 @@ async function readJsonResponseSafe(response: globalThis.Response) {
 
 async function runRealModel(model: ModelConfig) {
   if (!model.baseUrl || !model.apiKey) {
-    throw new Error(`模型 ${model.id} 缺少 baseUrl 或 apiKey`);
+    throw new Error(`模型 ${model.id || model.model} 缺少 baseUrl 或 apiKey`);
   }
 
   const taskResults = [];
@@ -254,12 +308,12 @@ async function runRealModel(model: ModelConfig) {
       const detail = data && typeof data === 'object' && 'error' in data
         ? String((data as { error: unknown }).error)
         : rawText.trim().slice(0, 300);
-      throw new Error(`模型 ${model.id} 调用失败: ${response.status} ${detail || '未知错误'}`);
+      throw new Error(`模型 ${model.id || model.model} 调用失败: ${response.status} ${detail || '未知错误'}`);
     }
 
     const content = data?.choices?.[0]?.message?.content;
     if (!content || typeof content !== 'string') {
-      throw new Error(`模型 ${model.id} 未返回有效内容`);
+      throw new Error(`模型 ${model.id || model.model} 未返回有效内容`);
     }
 
     const parsed = extractJson(content);
@@ -277,7 +331,7 @@ async function runRealModel(model: ModelConfig) {
   }
 
   return {
-    modelId: model.id,
+    modelId: model.id || model.model,
     label: `${model.provider}/${model.model}`,
     totalScore,
     maxScore,
@@ -296,11 +350,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const body = (typeof req.body === 'string' ? JSON.parse(req.body) : req.body) as RequestBody;
-    const models = body?.models ?? [];
-    if (!Array.isArray(models) || models.length === 0) {
-      res.status(400).json({ error: 'models 不能为空' });
-      return;
-    }
+    const normalized = normalizeConfigs(body?.models ?? []);
+    const models = expandConfigs(normalized);
+    validateConfigs(models);
 
     const results = [];
     for (const model of models) {

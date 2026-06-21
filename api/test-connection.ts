@@ -10,12 +10,17 @@ function normalizeConfigs(raw: unknown): ModelConfig[] {
     throw new Error('配置必须是 JSON 数组');
   }
 
-  return raw.map((item, index) => {
+  return raw.map((item) => {
     const current = typeof item === 'object' && item !== null ? (item as Partial<ModelConfig>) : {};
+    const models = Array.isArray(current.models)
+      ? current.models.map((model) => String(model).trim()).filter(Boolean)
+      : (current.model ? [current.model.trim()] : []);
+
     return {
-      id: current.id?.trim() || `model-${index + 1}`,
+      id: current.id?.trim() || '',
       provider: current.provider?.trim() || '',
-      model: current.model?.trim() || '',
+      model: models[0] || '',
+      models,
       apiMode: 'real',
       baseUrl: current.baseUrl?.trim() || '',
       apiKey: current.apiKey?.trim() || '',
@@ -23,15 +28,29 @@ function normalizeConfigs(raw: unknown): ModelConfig[] {
   });
 }
 
+function expandConfigs(configs: ModelConfig[]) {
+  return configs.flatMap((config, configIndex) => {
+    const models = Array.isArray(config.models) && config.models.length > 0
+      ? config.models
+      : (config.model ? [config.model] : []);
+
+    return models.map((modelName, modelIndex) => ({
+      ...config,
+      id: config.id?.trim() || `${config.provider || 'provider'}-${configIndex + 1}-${modelIndex + 1}`,
+      model: modelName,
+      models,
+    }));
+  });
+}
+
 function validateConfigs(configs: ModelConfig[]) {
   if (!configs.length) throw new Error('至少需要一个模型配置');
 
   for (const config of configs) {
-    if (!config.id?.trim()) throw new Error('每个模型都需要 id');
-    if (!config.provider?.trim()) throw new Error(`模型 ${config.id} 的 provider 不能为空`);
-    if (!config.model?.trim()) throw new Error(`模型 ${config.id} 的 model 不能为空`);
-    if (!config.baseUrl?.trim()) throw new Error(`模型 ${config.id} 的 baseUrl 不能为空`);
-    if (!config.apiKey?.trim()) throw new Error(`模型 ${config.id} 的 apiKey 不能为空`);
+    if (!config.provider?.trim()) throw new Error('provider 不能为空');
+    if (!config.model?.trim()) throw new Error(`供应商 ${config.provider || '-'} 的模型名不能为空`);
+    if (!config.baseUrl?.trim()) throw new Error(`供应商 ${config.provider} 的 baseUrl 不能为空`);
+    if (!config.apiKey?.trim()) throw new Error(`供应商 ${config.provider} 的 apiKey 不能为空`);
   }
 }
 
@@ -50,7 +69,7 @@ async function testSingleModel(model: ModelConfig) {
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: '你必须只返回 JSON。' },
-      { role: 'user', content: '请只返回 {"ok":true,"pong":"pong"}' },
+      { role: 'user', content: '{"ok":true,"pong":"pong"}' },
     ],
   };
 
@@ -70,7 +89,7 @@ async function testSingleModel(model: ModelConfig) {
       : rawText.trim().slice(0, 220);
     return {
       ok: false,
-      modelId: model.id,
+      modelId: model.id || model.model,
       detail: `${response.status} ${detail || '未知错误'}`,
     };
   }
@@ -79,15 +98,15 @@ async function testSingleModel(model: ModelConfig) {
   if (!content || typeof content !== 'string') {
     return {
       ok: false,
-      modelId: model.id,
+      modelId: model.id || model.model,
       detail: '响应成功，但未返回 message.content',
     };
   }
 
   return {
     ok: true,
-    modelId: model.id,
-    detail: '接口可达，模型已返回内容',
+    modelId: model.id || model.model,
+    detail: `接口可达，模型 ${model.model} 已返回内容`,
   };
 }
 
@@ -99,7 +118,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const body = (typeof req.body === 'string' ? JSON.parse(req.body) : req.body) as RequestBody;
-    const models = normalizeConfigs(body?.models ?? []);
+    const normalized = normalizeConfigs(body?.models ?? []);
+    const models = expandConfigs(normalized);
     validateConfigs(models);
 
     const results = [];
